@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
+#include <ctype.h>
+#include <string.h>
 /*=============================== Data structures ========================*/
 
 #define TFOBJ_TYPE_INT 0
@@ -54,6 +55,7 @@ tfobj *createObject(int type){
     tfobj *o = xmalloc(sizeof(tfobj));
     o->type = type;
     o->refcount = 1;
+    return o;
 }
 
 tfobj *createStringObject(char *s, size_t len){
@@ -81,12 +83,102 @@ tfobj *createBoolObject(int i){
     return o;
 }
 
-tfobj *createListObject(int i){
+/* ================================ List  object ====================== */
+
+tfobj *createListObject(void){
     tfobj *o = createObject(TFOBJ_TYPE_LIST);
     o->list.ele = NULL;
     o->list.len = 0;
     return o;
 }
+
+/* Add the new element at the end of the list 'list'. 
+ * It is up to the caller to increment the reference count of the
+ * element added to the list, if needed */
+void listPush(tfobj *l, tfobj *ele) {
+    l->list.ele = realloc(l->list.ele, sizeof(tfobj*) * (l->list.len+1)); 
+    l->list.ele[l->list.len] = ele;
+    l->list.len++;
+}
+
+/* ====================== Turn program into toy forth ================== */
+void parseSpaces(tfparser *parser){
+    while(isspace(parser->p[0])) parser->p++;
+}
+
+#define MAX_NUM_LEN 128
+tfobj *parseNumber(tfparser *parser){
+    char buf[MAX_NUM_LEN];
+    char *start = parser->p;
+    char *end;
+    
+    if (parser->p[0] == '-') parser->p++;
+    while(parser->p[0] && isdigit(parser->p[0])) parser->p++;
+    end = parser->p;
+    int numlen = end-start;
+    if (numlen >= MAX_NUM_LEN) return NULL;
+    
+    memcpy(buf, start, numlen);
+    buf[numlen] = 0;
+    
+    
+    tfobj *o = createIntObject(atoi(buf));
+    
+    return o;
+}
+
+tfobj *compile(char *prg){
+    tfparser parser;
+    parser.prg = prg;
+    parser.p = prg;
+    
+    tfobj *parsed = createListObject();
+
+    while(parser.p){
+        tfobj *o;
+        char *token_start = parser.p;
+        
+        parseSpaces(&parser);
+        if(parser.p[0] == 0) break; //End of program reached.
+
+        if(isdigit(parser.p[0]) || parser.p[0] == '-') {
+            o = parseNumber(&parser);
+        } else{
+            o = NULL;
+        }
+       
+        //Check if the current token produced a parsing error.
+        if(o == NULL) {
+            //memory leak manage
+            printf("Syntax error near: %32s ...\n", token_start);
+            return NULL;
+        }else {
+            listPush(parsed,o);
+        }
+       
+    }
+    return parsed;
+}
+
+/* ====================== Execute the program ========================= */
+
+void exec(tfobj *prg) {
+    printf("[");    
+    for(size_t j = 0; j < prg->list.len; j++) {
+        tfobj *o = prg->list.ele[j]; 
+        switch(o->type){
+            case TFOBJ_TYPE_INT:
+                printf("%d", o->i);
+                break;
+            default:
+                printf("?");
+                break;
+        }
+        printf(" ");
+    }
+    printf("]\n");
+}
+
 /* ========================== Main ===================================== */
 
 int main(int argc, char **argv){
@@ -94,11 +186,25 @@ int main(int argc, char **argv){
         fprintf(stderr,"Usage: %s <filename>\n", argv[0]);
         return 1;
     }
+  
+    /*Read the program in memory, for later parsing. */ 
+    FILE *fp = fopen(argv[1],"r");
+    if(fp == NULL){
+        perror("Opening Toy Forth program");
+        return 1;
+    }
+
+    fseek(fp,0,SEEK_END);
+    long file_size = ftell(fp);
+    char *prgtext = xmalloc(file_size+1);
+    fseek(fp,0,SEEK_SET);
+    fread(prgtext,file_size,1,fp);
+    prgtext[file_size] = 0;
+    fclose(fp);
 
     tfobj *prg = compile(prgtext);
-    exec(prgtext);
-    return 0;
-    
+    exec(prg);
+    return 0; 
 }
 
 
